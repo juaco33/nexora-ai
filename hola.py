@@ -807,6 +807,13 @@ def wendy_dashboard_page() -> str:
 		.secondary-btn { background: rgba(125,216,255,0.12); color: var(--text); border: 1px solid rgba(125,216,255,0.3); }
 		.primary-btn:hover, .secondary-btn:hover { filter: brightness(1.06); }
 		.notice { min-height: 22px; color: var(--accent); margin-top: 12px; font-size: 14px; line-height: 1.5; }
+		.booking-chat { margin-top: 22px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+		.booking-chat-header { padding: 14px 16px; border-bottom: 1px solid var(--border); color: var(--accent); font-weight: 700; }
+		.booking-chat-body { min-height: 110px; max-height: 220px; overflow-y: auto; padding: 14px; }
+		.booking-chat-message { max-width: 82%; padding: 9px 11px; border-radius: 12px; margin-bottom: 9px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+		.booking-chat-message.ai { background: rgba(89,247,211,0.08); border: 1px solid rgba(89,247,211,0.2); }
+		.booking-chat-message.client { margin-left: auto; background: rgba(125,216,255,0.1); border: 1px solid rgba(125,216,255,0.2); }
+		.booking-chat-footer { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px; border-top: 1px solid var(--border); }
 		.company-panel { display: none; padding: 22px; margin-top: 22px; }
 		.company-panel.visible { display: block; }
 		.company-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
@@ -852,6 +859,11 @@ def wendy_dashboard_page() -> str:
 				<div class="field"><label>Teléfono</label><input id="bookPhone"></div>
 				<div class="field"><label>Fecha y hora</label><input id="bookDate" type="datetime-local"></div>
 				<div class="field" style="grid-column: 1 / -1;"><label>Motivo</label><input id="bookReason"></div>
+				<div class="booking-chat" style="grid-column: 1 / -1;">
+					<div class="booking-chat-header">¿Tienes preguntas antes de agendar?</div>
+					<div class="booking-chat-body" id="publicChatMessages"><div class="booking-chat-message ai">Hola. Pregúntame por horarios, servicios o cómo agendar tu cita.</div></div>
+					<div class="booking-chat-footer"><input id="publicChatInput" type="text"><button id="publicChatSend" class="secondary-btn" type="button">Preguntar</button></div>
+				</div>
 				<div class="field" style="grid-column: 1 / -1;"><button id="bookSubmit" class="primary-btn" type="button">Solicitar cita</button><div id="bookMsg" class="notice"></div></div>
 			</div>
 		</section>
@@ -1097,12 +1109,35 @@ def wendy_dashboard_page() -> str:
 			document.getElementById('bookMsg').textContent = response.ok ? 'Cita enviada correctamente.' : readableError(data);
 		}
 
+		async function sendPublicChatMessage() {
+			var input = document.getElementById('publicChatInput');
+			var body = document.getElementById('publicChatMessages');
+			var message = input.value.trim();
+			var companyId = document.getElementById('bookCompany').value.trim();
+			if (!message || !companyId) return;
+			var clientMessage = document.createElement('div');
+			clientMessage.className = 'booking-chat-message client';
+			clientMessage.textContent = message;
+			body.appendChild(clientMessage);
+			input.value = '';
+			var waiting = document.createElement('div');
+			waiting.className = 'booking-chat-message ai';
+			waiting.textContent = 'Estoy revisando la información de la empresa...';
+			body.appendChild(waiting);
+			body.scrollTop = body.scrollHeight;
+			var response = await fetch('/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Company-ID': companyId }, body: JSON.stringify({ message: message }) });
+			var data = await response.json();
+			waiting.textContent = response.ok ? data.reply : readableError(data);
+			body.scrollTop = body.scrollHeight;
+		}
+
 		function bindActionHandlers() {
 			var mapped = {
 				loginSubmit: companyLogin,
 				signupSubmit: signupCompany,
 				adminSubmit: adminLogin,
 				bookSubmit: bookAppointment,
+				publicChatSend: sendPublicChatMessage,
 				chatSend: sendManualReply,
 				infoSave: saveCompanyInfo,
 				logoutCompanyBtn: logoutCompany,
