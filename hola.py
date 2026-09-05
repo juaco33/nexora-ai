@@ -892,9 +892,10 @@ def wendy_dashboard_page() -> str:
 				<div class="field"><label>Fecha y hora</label><input id="bookDate" type="datetime-local"></div>
 				<div class="field" style="grid-column: 1 / -1;"><label>Motivo</label><input id="bookReason"></div>
 				<div class="booking-chat" style="grid-column: 1 / -1;">
-					<div class="booking-chat-header">¿Tienes preguntas antes de agendar?</div>
+					<div class="booking-chat-header">Habla con la empresa</div>
+					<div class="field" style="padding: 14px 14px 0;"><label>Código de la empresa destinataria</label><input id="chatCompanyCode" type="text"></div>
 					<div class="booking-chat-body" id="publicChatMessages"><div class="booking-chat-message ai">Hola. Pregúntame por horarios, servicios o cómo agendar tu cita.</div></div>
-					<div class="booking-chat-footer"><input id="publicChatInput" type="text"><button id="publicChatSend" class="secondary-btn" type="button">Preguntar</button></div>
+					<div class="booking-chat-footer"><input id="publicChatInput" type="text"><button id="publicChatSend" class="secondary-btn" type="button">Enviar mensaje</button></div>
 				</div>
 				<div class="field" style="grid-column: 1 / -1;"><button id="bookSubmit" class="primary-btn" type="button">Solicitar cita</button><div id="bookMsg" class="notice"></div></div>
 			</div>
@@ -1145,8 +1146,12 @@ def wendy_dashboard_page() -> str:
 			var input = document.getElementById('publicChatInput');
 			var body = document.getElementById('publicChatMessages');
 			var message = input.value.trim();
-			var companyId = document.getElementById('bookCompany').value.trim();
-			if (!message || !companyId) return;
+			var companyId = document.getElementById('chatCompanyCode').value.trim();
+			if (!companyId) {
+				document.getElementById('bookMsg').textContent = 'Escribe primero el código de la empresa a la que va dirigido el mensaje.';
+				return;
+			}
+			if (!message) return;
 			var clientMessage = document.createElement('div');
 			clientMessage.className = 'booking-chat-message client';
 			clientMessage.textContent = message;
@@ -1160,6 +1165,7 @@ def wendy_dashboard_page() -> str:
 			var response = await fetch('/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Company-ID': companyId }, body: JSON.stringify({ message: message }) });
 			var data = await response.json();
 			waiting.textContent = response.ok ? data.reply : readableError(data);
+			document.getElementById('bookMsg').textContent = response.ok ? 'Respuesta recibida de ' + (data.company || 'la empresa') + '.' : 'No se pudo contactar la empresa.';
 			body.scrollTop = body.scrollHeight;
 		}
 
