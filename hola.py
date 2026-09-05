@@ -791,6 +791,11 @@ def wendy_dashboard_page() -> str:
 		.brand { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); font-weight: 700; }
 		.brand strong { display: block; margin-top: 6px; font-size: 24px; letter-spacing: 0; color: var(--text); }
 		.badge { background: rgba(89,247,211,0.08); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); }
+		.public-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 22px 0; }
+		.public-tab { border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; background: rgba(11,27,37,0.82); color: var(--text); cursor: pointer; font-weight: 700; }
+		.public-tab.active { background: var(--accent); color: #05232a; box-shadow: 0 8px 22px rgba(89,247,211,0.18); }
+		.public-section { display: none; }
+		.public-section.active { display: block; }
 		.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 12px 32px var(--shadow); overflow: hidden; }
 		.hero { padding: 28px 26px; background: linear-gradient(135deg, rgba(13,31,42,0.9), rgba(8,17,25,0.92)); }
 		.hero h1 { margin: 10px 0 8px; font-size: clamp(2rem, 5vw, 3.3rem); line-height: 1.1; font-weight: 800; }
@@ -836,6 +841,7 @@ def wendy_dashboard_page() -> str:
 		.list-item { padding: 10px 12px; border-radius: 10px; background: rgba(6,20,28,0.7); border: 1px solid rgba(255,255,255,0.04); }
 		.list-item strong { display: block; color: var(--text); margin-bottom: 4px; }
 		@media (max-width: 900px) {
+			.public-tabs { grid-template-columns: 1fr; }
 			.grid-two, .chat-layout, .meta-grid { grid-template-columns: 1fr; }
 			.company-header { flex-direction: column; align-items: flex-start; }
 			.chat-footer { grid-template-columns: 1fr; }
@@ -853,6 +859,15 @@ def wendy_dashboard_page() -> str:
 			<div class="brand">Plataforma multiempresa</div>
 			<h1>Chats privados para cada empresa</h1>
 			<p class="subtitle">Cada cuenta gestiona su propio chat, sus clientes, sus citas y su información interna. La inteligencia artificial responde solo con los datos de esa empresa, nunca con los de otra.</p>
+		</section>
+
+		<nav class="public-tabs" aria-label="Secciones principales">
+			<button class="public-tab active" type="button" data-section="bookingSection">Solicitar cita</button>
+			<button class="public-tab" type="button" data-section="companyAccessSection">Cuenta de empresa</button>
+			<button class="public-tab" type="button" data-section="adminAccessSection">Administrador</button>
+		</nav>
+
+		<section class="panel hero public-section active" id="bookingSection">
 			<div class="grid-two">
 				<div class="field"><label>Código de la empresa</label><input id="bookCompany"></div>
 				<div class="field"><label>Nombre</label><input id="bookName"></div>
@@ -897,7 +912,7 @@ def wendy_dashboard_page() -> str:
 			</div>
 		</section>
 
-		<section class="panel hero" style="margin-top: 22px;">
+		<section class="panel hero public-section" id="companyAccessSection" style="margin-top: 22px;">
 			<div class="brand">Cuenta empresa</div>
 			<div class="grid-two" style="margin-top: 14px;">
 				<div class="field"><label>Correo</label><input id="loginEmail" type="email"></div>
@@ -916,7 +931,7 @@ def wendy_dashboard_page() -> str:
 			</div>
 		</section>
 
-		<section class="panel hero" style="margin-top: 22px;">
+		<section class="panel hero public-section" id="adminAccessSection" style="margin-top: 22px;">
 			<div class="brand">Administración</div>
 			<div class="grid-two" style="margin-top: 14px;">
 				<div class="field"><label>Correo del propietario</label><input id="adminEmail" type="email"></div>
@@ -1131,6 +1146,15 @@ def wendy_dashboard_page() -> str:
 			body.scrollTop = body.scrollHeight;
 		}
 
+		function showPublicSection(sectionId, selectedTab) {
+			document.querySelectorAll('.public-section').forEach(function (section) {
+				section.classList.toggle('active', section.id === sectionId);
+			});
+			document.querySelectorAll('.public-tab').forEach(function (tab) {
+				tab.classList.toggle('active', tab === selectedTab);
+			});
+		}
+
 		function bindActionHandlers() {
 			var mapped = {
 				loginSubmit: companyLogin,
@@ -1148,6 +1172,9 @@ def wendy_dashboard_page() -> str:
 				if (el && typeof mapped[id] === 'function') {
 					el.onclick = mapped[id];
 				}
+			});
+			document.querySelectorAll('.public-tab').forEach(function (tab) {
+				tab.onclick = function () { showPublicSection(tab.dataset.section, tab); };
 			});
 			document.addEventListener('click', function (event) {
 				var target = event.target;
