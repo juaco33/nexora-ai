@@ -2,6 +2,10 @@ owner.key
 virtual_employee.db
 virtual_employee.db-shm
 virtual_employee.db-wal
+*.db
+*.db-shm
+*.db-wal
+.env
 __pycache__/
 *.pyc
 tmp_page_script.js
