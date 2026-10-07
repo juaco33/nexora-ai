@@ -271,14 +271,17 @@ def workspace_page() -> str:
     .card { padding: 22px 20px; border-radius: 18px; background: var(--panel-soft); border:1px solid var(--border); }
     .card h3 { margin: 0 0 10px; }
     .card p { margin: 0; color: var(--muted); }
-    .testimonials { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:18px; margin-top:18px; }
-    .testimonial { padding: 22px; border-radius: 18px; background: var(--panel-soft); border:1px solid var(--border); }
-    .testimonial-stars { color: #ffd166; letter-spacing: 0.12em; margin-bottom: 14px; }
-    .testimonial-quote { margin: 0 0 18px; color: var(--text); line-height: 1.7; }
-    .testimonial-author { display:flex; align-items:center; gap:10px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.08); }
-    .testimonial-avatar { width:42px; height:42px; border-radius:50%; display:grid; place-items:center; background: rgba(89,247,211,0.12); color: var(--accent); font-weight:700; }
-    .testimonial-author strong { display:block; }
-    .testimonial-author span { color: var(--muted); font-size:0.8rem; }
+    .review-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:18px; margin-top:18px; }
+    .review { padding: 22px; border-radius: 18px; background: var(--panel-soft); border:1px solid var(--border); }
+    .review-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; }
+    .review-badge { color: var(--accent); font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700; }
+    .review-stars { color: #ffd166; letter-spacing: 0.12em; }
+    .review-quote { margin: 0; color: var(--text); line-height: 1.7; }
+    .review-author { display:flex; align-items:center; gap:10px; padding-top:14px; margin-top:18px; border-top:1px solid rgba(255,255,255,0.08); }
+    .review-avatar { width:42px; height:42px; border-radius:50%; display:grid; place-items:center; background: rgba(89,247,211,0.12); color: var(--accent); font-weight:700; }
+    .review-author strong { display:block; }
+    .review-author span { color: var(--muted); font-size:0.8rem; }
+    .review-note { margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(255,255,255,0.1); color: var(--muted); font-size: 0.8rem; }
     .panel { padding: 22px 22px 26px; border-radius:20px; border:1px solid var(--border); background: rgba(9,24,31,0.96); box-shadow: 0 18px 44px rgba(0,0,0,0.2); }
     .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:16px; margin-top:18px; }
     .field { display:flex; flex-direction:column; gap:8px; }
@@ -334,7 +337,7 @@ def workspace_page() -> str:
 
     <section class=\"hero\">
       <div class=\"eyebrow\">Plataforma multiempresa</div>
-      <h1>La IA que hace que cada negocio se vea más profesional y venda más.</h1>
+      <h1>Encuentra la empresa correcta y recibe ayuda con confianza.</h1>
       <p class=\"subtitle\">Atiende clientes 24/7, organiza citas y ofrece una atención premium con contexto real para cada empresa.</p>
       <div class=\"actions\">
         <button class=\"primary-btn js-scroll-target\" type=\"button\" data-target=\"bookingSection\">Solicitar demo</button>
@@ -349,13 +352,67 @@ def workspace_page() -> str:
     </section>
 
     <section class=\"section\">
-      <h2>Todo lo que tu empresa necesita para vender mejor</h2>
-      <p>Una solución creada para operar con claridad, atender rápido y convertir más visitas en oportunidades reales.</p>
+      <h2>Una experiencia más clara para cada cliente</h2>
+      <p>Consulta a la empresa, solicita una cita y recibe información útil sin complicaciones.</p>
       <div class=\"cards\">
         <div class=\"card\"><h3>Reservas automáticas</h3><p>Agenda citas y reduce errores con un proceso más claro para cada cliente.</p></div>
         <div class=\"card\"><h3>Chat IA privado</h3><p>Responde con contexto y ayuda cada negocio sin mezclar información entre empresas.</p></div>
         <div class=\"card\"><h3>Clientes mejor atendidos</h3><p>Organiza historial, conversaciones y seguimiento por empresa para ofrecer atención más clara.</p></div>
         <div class=\"card\"><h3>Control total</h3><p>Gestiona clientes, planes, accesos y operaciones desde un panel central y seguro.</p></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div style="display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">Experiencias de clientes</div>
+          <h2 style="margin-top:12px;">Clientes satisfechos con la atención</h2>
+        </div>
+        <span style="color:var(--muted);font-size:0.9rem;">Evaluaciones demostrativas · 4 y 5 estrellas</span>
+      </div>
+      <div class="review-grid">
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Cliente · 5 estrellas</span><span class="review-stars">★★★★★</span></div>
+          <p class="review-quote">“La atención fue muy rápida y pude confirmar mi cita en pocos minutos. La información estaba clara y ordenada.”</p>
+          <div class="review-author"><div class="review-avatar">M</div><div><strong>Mateo Ruiz</strong><span>Cliente de servicios</span></div></div>
+        </article>
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Cliente · 5 estrellas</span><span class="review-stars">★★★★★</span></div>
+          <p class="review-quote">“Me gustó que pude preguntar por horarios y servicios sin tener que llamar. Todo se sintió sencillo y profesional.”</p>
+          <div class="review-author"><div class="review-avatar">C</div><div><strong>Camila Gómez</strong><span>Cliente frecuente</span></div></div>
+        </article>
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Cliente · 4 estrellas</span><span class="review-stars">★★★★☆</span></div>
+          <p class="review-quote">“La respuesta fue clara y útil. Recibí una cita organizada y pude tener todo el contexto antes de llegar.”</p>
+          <div class="review-author"><div class="review-avatar">J</div><div><strong>Javier Pérez</strong><span>Cliente nuevo</span></div></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div style="display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">Experiencias de empresas</div>
+          <h2 style="margin-top:12px;">Empresas que valoran la funcionalidad</h2>
+        </div>
+        <span style="color:var(--muted);font-size:0.9rem;">Evaluaciones demostrativas · 4 y 5 estrellas</span>
+      </div>
+      <div class="review-grid">
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Empresa · 5 estrellas</span><span class="review-stars">★★★★★</span></div>
+          <p class="review-quote">“La plataforma ayuda a organizar clientes y citas sin mezclar información. El panel es claro y funcional para nuestro equipo.”</p>
+          <div class="review-author"><div class="review-avatar">A</div><div><strong>Ana Torres</strong><span>Administradora de atención</span></div></div>
+        </article>
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Empresa · 5 estrellas</span><span class="review-stars">★★★★★</span></div>
+          <p class="review-quote">“La IA permite responder preguntas con información relevante para cada negocio. La gestión mejora mucho.”</p>
+          <div class="review-author"><div class="review-avatar">D</div><div><strong>Daniel Ortega</strong><span>Director de operaciones</span></div></div>
+        </article>
+        <article class="review">
+          <div class="review-header"><span class="review-badge">Empresa · 4 estrellas</span><span class="review-stars">★★★★☆</span></div>
+          <p class="review-quote">“Nos permite mantener conversaciones y citas en un solo lugar. La organización es práctica y reduce errores.”</p>
+          <div class="review-author"><div class="review-avatar">L</div><div><strong>Lucía Ramírez</strong><span>Coordinadora de servicios</span></div></div>
+        </article>
       </div>
     </section>
 
@@ -1086,6 +1143,7 @@ def admin_root() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("hola:app", host="0.0.0.0", port=8000, reload=False)
+
 
 
 
