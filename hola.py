@@ -271,6 +271,14 @@ def workspace_page() -> str:
     .card { padding: 22px 20px; border-radius: 18px; background: var(--panel-soft); border:1px solid var(--border); }
     .card h3 { margin: 0 0 10px; }
     .card p { margin: 0; color: var(--muted); }
+    .testimonials { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:18px; margin-top:18px; }
+    .testimonial { padding: 22px; border-radius: 18px; background: var(--panel-soft); border:1px solid var(--border); }
+    .testimonial-stars { color: #ffd166; letter-spacing: 0.12em; margin-bottom: 14px; }
+    .testimonial-quote { margin: 0 0 18px; color: var(--text); line-height: 1.7; }
+    .testimonial-author { display:flex; align-items:center; gap:10px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.08); }
+    .testimonial-avatar { width:42px; height:42px; border-radius:50%; display:grid; place-items:center; background: rgba(89,247,211,0.12); color: var(--accent); font-weight:700; }
+    .testimonial-author strong { display:block; }
+    .testimonial-author span { color: var(--muted); font-size:0.8rem; }
     .panel { padding: 22px 22px 26px; border-radius:20px; border:1px solid var(--border); background: rgba(9,24,31,0.96); box-shadow: 0 18px 44px rgba(0,0,0,0.2); }
     .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:16px; margin-top:18px; }
     .field { display:flex; flex-direction:column; gap:8px; }
@@ -278,9 +286,11 @@ def workspace_page() -> str:
     input, textarea { width: 100%; padding: 12px 13px; border-radius:12px; border:1px solid var(--border); background: rgba(5,18,25,0.9); color: var(--text); }
     textarea { min-height: 110px; resize: vertical; }
     .notice { min-height: 22px; margin-top: 10px; color: var(--accent); }
-    .public-tabs { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin:26px 0 18px; }
+    .public-tabs { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; margin:26px 0 8px; }
     .public-tab { padding:13px 16px; border-radius:12px; border:1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--text); font-weight:700; cursor:pointer; }
     .public-tab.active { background: var(--accent); color:#04252d; }
+    .admin-tab-container { display:flex; justify-content:flex-end; margin:0 0 18px; }
+    .admin-tab { padding:6px 10px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background: rgba(255,255,255,0.01); color: rgba(255,255,255,0.5); font-size:11px; font-weight:600; cursor:pointer; }
     .public-section { display:none; }
     .public-section.active { display:block; }
     .company-profile-card { display:none; align-items:center; gap:14px; margin:0 0 18px; padding:16px; border:1px solid rgba(89,247,211,0.2); border-radius:16px; background: rgba(89,247,211,0.04); }
@@ -312,7 +322,7 @@ def workspace_page() -> str:
     .admin-panel { display:none; margin-top:18px; }
     .admin-panel.visible { display:block; }
     @media (max-width: 980px) { .cards, .stats, .grid, .chat-layout, .meta-grid { grid-template-columns:1fr; } }
-    @media (max-width: 640px) { .public-tabs, .stats, .cards { grid-template-columns:1fr; } .topbar, .company-header { flex-direction:column; align-items:flex-start; } .chat-footer { grid-template-columns:1fr; } }
+    @media (max-width: 640px) { .public-tabs, .stats, .cards { grid-template-columns:1fr; } .topbar, .company-header { flex-direction:column; align-items:flex-start; } .chat-footer { grid-template-columns:1fr; } .admin-tab-container { justify-content:center; } }
   </style>
 </head>
 <body>
@@ -349,13 +359,13 @@ def workspace_page() -> str:
       </div>
     </section>
 
-    <nav class=\"public-tabs\" aria-label=\"Secciones principales\">
-      <button class=\"public-tab active\" type=\"button\" data-target=\"bookingSection\">Solicitar cita</button>
-      <button class=\"public-tab\" type=\"button\" data-target=\"companyAccessSection\">Cuenta de empresa</button>
-      <button class=\"public-tab\" type=\"button\" data-target=\"adminAccessSection\">Administrador</button>
+    <nav class="public-tabs" aria-label="Secciones principales">
+      <button class="public-tab active" type="button" data-target="bookingSection">Solicitar cita</button>
+      <button class="public-tab" type="button" data-target="companyAccessSection">Cuenta de empresa</button>
     </nav>
-
-    <section class=\"panel public-section active\" id=\"bookingSection\">
+    <div class="admin-tab-container">
+      <button class="admin-tab" type="button" data-target="adminAccessSection">Administración</button>
+    </div>
       <div class=\"company-profile-card\" id=\"companyProfileCard\">
         <img id=\"companyProfileImage\" alt=\"Logo\" src=\"\" />
         <div>
@@ -762,7 +772,7 @@ def workspace_page() -> str:
       if (!(target instanceof HTMLElement)) return;
       const targetSection = target.dataset.target;
       if (targetSection) {
-        if (target.classList.contains('public-tab')) {
+        if (target.classList.contains('public-tab') || target.classList.contains('admin-tab')) {
           showSection(targetSection);
           return;
         }
@@ -788,7 +798,7 @@ def workspace_page() -> str:
     document.getElementById('chatSend').onclick = sendManualReply;
     document.getElementById('infoSave').onclick = saveCompanyInfo;
     document.getElementById('logoutCompanyBtn').onclick = logoutCompany;
-    document.querySelectorAll('.public-tab').forEach((tab) => tab.addEventListener('click', () => showSection(tab.dataset.target)));
+    document.querySelectorAll('.public-tab, .admin-tab').forEach((tab) => tab.addEventListener('click', () => showSection(tab.dataset.target)));
     document.querySelectorAll('.js-scroll-target').forEach((node) => node.addEventListener('click', () => showSection(node.dataset.target)));
     ['bookName', 'bookPhone', 'bookReason'].forEach((id) => {
       const el = document.getElementById(id);
@@ -1076,3 +1086,11 @@ def admin_root() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("hola:app", host="0.0.0.0", port=8000, reload=False)
+
+
+
+
+
+
+
+
