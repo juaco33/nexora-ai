@@ -9,9 +9,22 @@ from threading import Lock
 from typing import Annotated, Any
 from urllib.request import Request, urlopen
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+
+def resolve_admin_credentials() -> tuple[str, str]:
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
+    email = (os.getenv("VIRTUAL_EMPLOYEE_ADMIN_EMAIL") or os.getenv("NEXORA_ADMIN_EMAIL") or "admin@nexora.ai").lower()
+    key = os.getenv("VIRTUAL_EMPLOYEE_ADMIN_KEY") or os.getenv("NEXORA_ADMIN_KEY") or ""
+    if not key:
+      owner_key_path = os.path.join(os.path.dirname(__file__), "owner.key")
+      if os.path.isfile(owner_key_path):
+        with open(owner_key_path, encoding="utf-8") as key_file:
+          key = key_file.read().strip()
+    return email, key
+
 
 app = FastAPI(
     title="Nexora AI",
@@ -20,13 +33,7 @@ app = FastAPI(
 )
 
 DB_PATH = os.getenv("VIRTUAL_EMPLOYEE_DATABASE") or os.getenv("NEXORA_DB_PATH") or os.path.join(os.path.dirname(__file__), "nexora.db")
-ADMIN_EMAIL = (os.getenv("VIRTUAL_EMPLOYEE_ADMIN_EMAIL") or os.getenv("NEXORA_ADMIN_EMAIL") or "admin@nexora.ai").lower()
-ADMIN_KEY = os.getenv("VIRTUAL_EMPLOYEE_ADMIN_KEY") or os.getenv("NEXORA_ADMIN_KEY") or ""
-if not ADMIN_KEY:
-  owner_key_path = os.path.join(os.path.dirname(__file__), "owner.key")
-  if os.path.isfile(owner_key_path):
-    with open(owner_key_path, encoding="utf-8") as key_file:
-      ADMIN_KEY = key_file.read().strip()
+ADMIN_EMAIL, ADMIN_KEY = resolve_admin_credentials()
 database_lock = Lock()
 
 
@@ -115,6 +122,75 @@ def initialize_db() -> None:
         )
         """
     )
+
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+    required_columns = {
+        "name": "TEXT",
+        "sector": "TEXT",
+        "email": "TEXT",
+        "password_hash": "TEXT",
+        "plan_id": "TEXT",
+        "status": "TEXT",
+        "description": "TEXT",
+        "about": "TEXT",
+        "profile_photo_url": "TEXT",
+        "knowledge": "TEXT",
+        "created_at": "TEXT",
+    }
+    for column_name, column_sql in required_columns.items():
+        if column_name not in existing_columns:
+            conn.execute(f"ALTER TABLE companies ADD COLUMN {column_name} {column_sql}")
+
+    if "config" in existing_columns:
+        legacy_rows = conn.execute("SELECT company_id, config FROM companies WHERE config IS NOT NULL").fetchall()
+        for company_id, config_blob in legacy_rows:
+            if not config_blob:
+                continue
+            try:
+                config = json.loads(config_blob)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(config, dict):
+                continue
+            email_value = (config.get("email") or f"{company_id}@legacy.local").lower()
+            if conn.execute("SELECT 1 FROM companies WHERE email = ? AND company_id != ?", (email_value, company_id)).fetchone():
+                email_value = f"{company_id}@legacy.local"
+            password_hash = config.get("password_hash") or hash_password("legacy123")
+            name_value = config.get("name") or company_id
+            sector_value = config.get("sector") or "General"
+            plan_value = config.get("plan_id") or config.get("plan") or "starter"
+            status_value = config.get("status") or "active"
+            description_value = config.get("description") or config.get("about") or ""
+            about_value = config.get("about") or ""
+            photo_value = config.get("profile_photo_url") or ""
+            knowledge_value = json.dumps(config.get("knowledge") or config.get("services") or [], ensure_ascii=False)
+            conn.execute(
+                """
+                UPDATE companies
+                SET name = ?, sector = ?, email = ?, password_hash = ?, plan_id = ?, status = ?, description = ?, about = ?, profile_photo_url = ?, knowledge = ?
+                WHERE company_id = ?
+                """,
+                (
+                    name_value,
+                    sector_value,
+                    email_value,
+                    password_hash,
+                    plan_value,
+                    status_value,
+                    description_value,
+                    about_value,
+                    photo_value,
+                    knowledge_value,
+                    company_id,
+                ),
+            )
+    conn.execute("UPDATE companies SET email = lower(email) WHERE email IS NOT NULL")
+    conn.execute("UPDATE companies SET name = COALESCE(name, company_id) WHERE name IS NULL OR name = ''")
+    conn.execute("UPDATE companies SET status = 'active' WHERE status IS NULL OR status = ''")
+    conn.execute("UPDATE companies SET plan_id = 'starter' WHERE plan_id IS NULL OR plan_id = ''")
+    conn.execute("UPDATE companies SET knowledge = '[]' WHERE knowledge IS NULL OR knowledge = ''")
+    conn.commit()
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -284,6 +360,13 @@ def workspace_page() -> str:
     .review-note { margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(255,255,255,0.1); color: var(--muted); font-size: 0.8rem; }
     .panel { padding: 22px 22px 26px; border-radius:20px; border:1px solid var(--border); background: rgba(9,24,31,0.96); box-shadow: 0 18px 44px rgba(0,0,0,0.2); }
     .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:16px; margin-top:18px; }
+    .plan-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; margin: 18px 0 22px; }
+    .plan-card { width:100%; text-align:left; border:1px solid var(--border); border-radius:16px; padding:18px 16px; background: rgba(255,255,255,0.02); color: var(--text); cursor:pointer; transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+    .plan-card:hover { transform: translateY(-2px); border-color: rgba(89,247,211,0.4); }
+    .plan-card.active { background: rgba(89,247,211,0.08); border-color: rgba(89,247,211,0.45); box-shadow: 0 12px 25px rgba(89,247,211,0.12); }
+    .plan-card .plan-name { display:block; font-size: 0.78rem; letter-spacing:0.12em; text-transform:uppercase; color: var(--accent); font-weight:700; }
+    .plan-card strong { display:block; margin-top:8px; font-size: 1.8rem; letter-spacing: -0.05em; }
+    .plan-card small { display:block; margin-top:6px; color: var(--muted); line-height: 1.5; }
     .field { display:flex; flex-direction:column; gap:8px; }
     .field label { font-size: 11px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
     input, textarea { width: 100%; padding: 12px 13px; border-radius:12px; border:1px solid var(--border); background: rgba(5,18,25,0.9); color: var(--text); }
@@ -467,15 +550,33 @@ def workspace_page() -> str:
         <div class=\"field\" style=\"grid-column:1 / -1;\"><button id=\"loginSubmit\" class=\"primary-btn\" type=\"button\">Iniciar sesión</button><div id=\"loginMsg\" class=\"notice\"></div></div>
       </div>
 
-      <div class=\"grid\" style=\"margin-top:22px;\">
-        <div class=\"field\"><label>Código único</label><input id=\"signupId\" type=\"text\"></div>
-        <div class=\"field\"><label>Nombre de la empresa</label><input id=\"signupName\" type=\"text\"></div>
-        <div class=\"field\"><label>Sector</label><input id=\"signupSector\" type=\"text\"></div>
-        <div class=\"field\"><label>Plan</label><input id=\"signupPlan\" type=\"text\" placeholder=\"starter\"></div>
-        <div class=\"field\"><label>Correo</label><input id=\"signupEmail\" type=\"email\"></div>
-        <div class=\"field\"><label>Contraseña</label><input id=\"signupPassword\" type=\"password\"></div>
-        <div class=\"field\" style=\"grid-column:1 / -1;\"><label>Descripción breve</label><textarea id=\"companyDescription\" placeholder=\"Describe tu negocio, servicios y valor para tus clientes.\"></textarea></div>
-        <div class=\"field\" style=\"grid-column:1 / -1;\"><button id=\"signupSubmit\" class=\"primary-btn\" type=\"button\">Registrar empresa</button><div id=\"signupMsg\" class=\"notice\"></div></div>
+      <div class="plan-grid" aria-label="Planes disponibles">
+        <button class="plan-card active" type="button" data-plan="starter">
+          <span class="plan-name">Starter</span>
+          <strong>$150.000</strong>
+          <small>Para empezar con atención básica y reservas simples.</small>
+        </button>
+        <button class="plan-card" type="button" data-plan="professional">
+          <span class="plan-name">Professional</span>
+          <strong>$250.000</strong>
+          <small>Más automatización, IA y control de clientes.</small>
+        </button>
+        <button class="plan-card" type="button" data-plan="enterprise">
+          <span class="plan-name">Enterprise</span>
+          <strong>$400.000</strong>
+          <small>Para operaciones multiempresa y atención avanzada.</small>
+        </button>
+      </div>
+
+      <div class="grid" style="margin-top:22px;">
+        <div class="field"><label>Código único</label><input id="signupId" type="text"></div>
+        <div class="field"><label>Nombre de la empresa</label><input id="signupName" type="text"></div>
+        <div class="field"><label>Sector</label><input id="signupSector" type="text"></div>
+        <div class="field"><label>Plan</label><input id="signupPlan" type="text" value="starter" readonly></div>
+        <div class="field"><label>Correo</label><input id="signupEmail" type="email"></div>
+        <div class="field"><label>Contraseña</label><input id="signupPassword" type="password"></div>
+        <div class="field" style="grid-column:1 / -1;"><label>Descripción breve</label><textarea id="companyDescription" placeholder="Describe tu negocio, servicios y valor para tus clientes."></textarea></div>
+        <div class="field" style="grid-column:1 / -1;"><button id="signupSubmit" class="primary-btn" type="button">Registrar empresa</button><div id="signupMsg" class="notice"></div></div>
       </div>
     </section>
 
@@ -541,6 +642,15 @@ def workspace_page() -> str:
         return data.detail.map((item) => item.msg || 'Revisa los datos ingresados.').join(' ');
       }
       return data?.detail || fallback;
+    }
+
+    function selectPlan(planName) {
+      const input = document.getElementById('signupPlan');
+      const cards = document.querySelectorAll('.plan-card');
+      if (input) input.value = planName;
+      cards.forEach((card) => {
+        card.classList.toggle('active', card.dataset.plan === planName);
+      });
     }
 
     function updatePreview() {
@@ -855,6 +965,9 @@ def workspace_page() -> str:
     document.getElementById('chatSend').onclick = sendManualReply;
     document.getElementById('infoSave').onclick = saveCompanyInfo;
     document.getElementById('logoutCompanyBtn').onclick = logoutCompany;
+    document.querySelectorAll('.plan-card').forEach((card) => {
+      card.addEventListener('click', () => selectPlan(card.dataset.plan));
+    });
     document.querySelectorAll('.public-tab, .admin-tab').forEach((tab) => tab.addEventListener('click', () => showSection(tab.dataset.target)));
     document.querySelectorAll('.js-scroll-target').forEach((node) => node.addEventListener('click', () => showSection(node.dataset.target)));
     ['bookName', 'bookPhone', 'bookReason'].forEach((id) => {
@@ -976,16 +1089,18 @@ def login(payload: CompanyLogin) -> dict[str, str]:
 
 @app.post("/admin-login")
 def admin_login(payload: CompanyLogin) -> dict[str, str]:
-    if not ADMIN_KEY:
+    email, key = resolve_admin_credentials()
+    if not key:
         raise HTTPException(status_code=503, detail="Configura VIRTUAL_EMPLOYEE_ADMIN_KEY para habilitar el administrador.")
-    if payload.email.lower() != ADMIN_EMAIL or payload.password != ADMIN_KEY:
+    if payload.email.lower() != email or payload.password != key:
         raise HTTPException(status_code=401, detail="Credenciales de administrador incorrectas.")
-    return {"admin_key": ADMIN_KEY}
+    return {"admin_key": key}
 
 
 @app.get("/owner/companies")
 def owner_companies(x_admin_key: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
-    if not ADMIN_KEY or x_admin_key != ADMIN_KEY:
+    _, key = resolve_admin_credentials()
+    if not key or x_admin_key != key:
         raise HTTPException(status_code=401, detail="Clave de administrador inválida.")
     conn = get_db()
     rows = conn.execute("SELECT * FROM companies ORDER BY created_at DESC").fetchall()
@@ -995,7 +1110,8 @@ def owner_companies(x_admin_key: Annotated[str | None, Header()] = None) -> list
 
 @app.post("/owner/status/{company_id}/{status}")
 def owner_status(company_id: str, status: str, x_admin_key: Annotated[str | None, Header()] = None) -> dict[str, str]:
-    if not ADMIN_KEY or x_admin_key != ADMIN_KEY:
+    _, key = resolve_admin_credentials()
+    if not key or x_admin_key != key:
         raise HTTPException(status_code=401, detail="Clave de administrador inválida.")
     if status not in {"active", "disabled"}:
         raise HTTPException(status_code=400, detail="Estado inválido.")
