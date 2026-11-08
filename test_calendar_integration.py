@@ -45,9 +45,10 @@ class CalendarIntegrationTests(unittest.TestCase):
         conn = hola.get_db()
         conn.execute(
             """
-            INSERT INTO companies (company_id, name, email, password_hash, status)
-            VALUES ('empresa-uno', 'Empresa Uno', 'uno@example.com', 'test-hash', 'active')
-            """
+            INSERT INTO companies (company_id, name, email, password_hash, status, paid_through)
+            VALUES ('empresa-uno', 'Empresa Uno', 'uno@example.com', 'test-hash', 'active', ?)
+            """,
+            ((hola.bogota_today() + dt.timedelta(days=60)).isoformat(),),
         )
         conn.execute(
             "INSERT INTO sessions (token, company_id, email) VALUES ('session-token', 'empresa-uno', 'uno@example.com')"
@@ -144,9 +145,10 @@ class CalendarIntegrationTests(unittest.TestCase):
         conn = hola.get_db()
         conn.execute(
             """
-            INSERT INTO companies (company_id, name, email, password_hash, status)
-            VALUES ('empresa-dos', 'Empresa Dos', 'dos@example.com', 'test-hash', 'active')
-            """
+            INSERT INTO companies (company_id, name, email, password_hash, status, paid_through)
+            VALUES ('empresa-dos', 'Empresa Dos', 'dos@example.com', 'test-hash', 'active', ?)
+            """,
+            ((hola.bogota_today() + dt.timedelta(days=60)).isoformat(),),
         )
         conn.execute(
             "INSERT INTO sessions (token, company_id, email) VALUES ('other-session', 'empresa-dos', 'dos@example.com')"
@@ -227,6 +229,7 @@ class CalendarIntegrationTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(result["amount_cop"], price)
+                self.assertFalse(result["service_active"])
         with self.assertRaises(ValueError):
             hola.CompanySignup(
                 company_id="invalid-plan",
@@ -240,14 +243,14 @@ class CalendarIntegrationTests(unittest.TestCase):
         conn = hola.get_db()
         conn.executemany(
             """
-            INSERT INTO companies (company_id, name, sector, email, password_hash, status)
-            VALUES (?, ?, ?, ?, 'test-hash', ?)
+            INSERT INTO companies (company_id, name, sector, email, password_hash, status, paid_through)
+            VALUES (?, ?, ?, ?, 'test-hash', ?, ?)
             """,
             [
-                ("cafe-central", "Café Central", "gastronomico", "cafe@example.test", "active"),
-                ("restaurante-antiguo", "Restaurante Antiguo", "Restaurante", "restaurante@example.test", "active"),
-                ("spa-uno", "Spa Uno", "estetico", "spa@example.test", "active"),
-                ("hotel-off", "Hotel Fuera", "hoteleria", "hotel@example.test", "disabled"),
+                ("cafe-central", "Café Central", "gastronomico", "cafe@example.test", "active", (hola.bogota_today() + dt.timedelta(days=60)).isoformat()),
+                ("restaurante-antiguo", "Restaurante Antiguo", "Restaurante", "restaurante@example.test", "active", (hola.bogota_today() + dt.timedelta(days=60)).isoformat()),
+                ("spa-uno", "Spa Uno", "estetico", "spa@example.test", "active", (hola.bogota_today() + dt.timedelta(days=60)).isoformat()),
+                ("hotel-off", "Hotel Fuera", "hoteleria", "hotel@example.test", "disabled", (hola.bogota_today() + dt.timedelta(days=60)).isoformat()),
             ],
         )
         conn.commit()
@@ -262,6 +265,8 @@ class CalendarIntegrationTests(unittest.TestCase):
         searched = hola.public_companies(sector="gastronomico", q="central")
         self.assertEqual([company["company_id"] for company in searched], ["cafe-central"])
         self.assertNotIn("email", searched[0])
+        disabled = next(company for company in hola.public_companies() if company["company_id"] == "hotel-off")
+        self.assertFalse(disabled["service_active"])
 
     def test_signup_requires_a_supported_sector(self) -> None:
         for sector in ("gastronomico", "estetico", "hoteleria", "turismo"):
@@ -285,15 +290,56 @@ class CalendarIntegrationTests(unittest.TestCase):
 
     def test_directory_and_sector_selector_are_present(self) -> None:
         page = hola.workspace_page()
-        self.assertIn('data-target="directorySection"', page)
+        booking_section = page.index('id="bookingSection"')
         self.assertIn('id="directoryResults"', page)
         self.assertIn('id="directorySector"', page)
+        self.assertLess(booking_section, page.index('id="directorySector"'))
+        self.assertNotIn('id="directorySection"', page)
+        self.assertNotIn('data-target="directorySection"', page)
         self.assertIn('id="signupSector"', page)
+        self.assertIn("document.getElementById('chatCompanyCode').value = directoryCompanyId", page)
+        self.assertIn("document.getElementById('bookCompany').value = directoryCompanyId", page)
+        self.assertIn("document.getElementById('demo-chat').scrollIntoView", page)
         for sector in hola.COMPANY_SECTORS:
             with self.subTest(sector=sector):
                 self.assertIn(f'value="{sector}"', page)
                 self.assertEqual(hola.canonical_sector(sector), sector)
         self.assertEqual(hola.canonical_sector("Servicios profesionales"), "servicios_profesionales")
+
+    def test_company_registration_hides_after_login_and_returns_after_logout(self) -> None:
+        page = hola.workspace_page()
+        self.assertIn('id="companySignupSection"', page)
+        self.assertIn(".company-signup-section.hidden { display:none; }", page)
+        self.assertIn("document.getElementById('companySignupSection').classList.add('hidden')", page)
+        self.assertIn("document.getElementById('companySignupSection').classList.remove('hidden')", page)
+
+    def test_booking_page_refreshes_availability_for_other_clients(self) -> None:
+        page = hola.workspace_page()
+        self.assertIn("setInterval(() =>", page)
+        self.assertIn("}, 10000);", page)
+        self.assertIn("loadAvailability(true)", page)
+        self.assertIn("Ese horario acaba de ser reservado por otro cliente", page)
+        self.assertIn('id="bookingDays"', page)
+        self.assertIn('id="availabilitySlots" class="booking-options"', page)
+        self.assertIn("button.dataset.bookingDate = dateValue", page)
+        self.assertIn('id="bookingPreviousMonth"', page)
+        self.assertIn('id="bookingNextMonth"', page)
+        self.assertIn("daysInMonth", page)
+        self.assertIn("button.disabled = !isSelectable", page)
+        self.assertIn("label.textContent = !isOpen", page)
+        self.assertIn("'Cerrado'", page)
+        self.assertIn("'Fuera del período pagado'", page)
+        self.assertIn("target.closest('[data-booking-date]')?.dataset.bookingDate", page)
+        self.assertIn("button.dataset.slotTime = slot.starts_at", page)
+        self.assertIn("button.disabled = !slot.available", page)
+        self.assertNotIn('class="slots-table"', page)
+        self.assertIn("Registrar pago / renovar 1 mes", page)
+        self.assertIn("/owner/payment/", page)
+
+    def test_public_company_profile_exposes_hours_for_day_options(self) -> None:
+        profile = hola.public_company("empresa-uno")
+        self.assertEqual(profile["weekly_hours"]["monday"], {"open": "09:00", "close": "17:00"})
+        self.assertIsNone(profile["weekly_hours"]["sunday"])
 
     def test_starter_limit_blocks_extra_replies_and_reports_usage(self) -> None:
         conn = hola.get_db()
@@ -352,6 +398,7 @@ class CalendarIntegrationTests(unittest.TestCase):
         updated = hola.company_availability("empresa-uno", booking_date.isoformat())
         self.assertEqual(updated["slots"][0]["available"], False)
         self.assertEqual(updated["slots"][1]["available"], True)
+        self.assertIn("Los horarios se actualizan automáticamente", hola.workspace_page())
         with self.assertRaises(hola.HTTPException) as error:
             hola.create_booking(
                 hola.AppointmentRequest(
@@ -373,6 +420,42 @@ class CalendarIntegrationTests(unittest.TestCase):
         )
         released = hola.company_availability("empresa-uno", booking_date.isoformat())
         self.assertEqual(released["slots"][0]["available"], True)
+
+    def test_expired_company_is_visible_but_cannot_be_contacted_or_booked(self) -> None:
+        conn = hola.get_db()
+        conn.execute(
+            "UPDATE companies SET paid_through = ? WHERE company_id = 'empresa-uno'",
+            ((hola.bogota_today() - dt.timedelta(days=1)).isoformat(),),
+        )
+        conn.commit()
+        conn.close()
+        profile = hola.public_company("empresa-uno")
+        self.assertFalse(profile["service_active"])
+        self.assertIn("Empresa inhabilitada", profile["status_message"])
+        with self.assertRaises(hola.HTTPException) as availability_error:
+            hola.company_availability("empresa-uno", hola.bogota_today().isoformat())
+        self.assertEqual(availability_error.exception.status_code, 403)
+        with self.assertRaises(hola.HTTPException) as booking_error:
+            hola.create_booking(
+                hola.AppointmentRequest(client_name="Cliente", starts_at="2026-11-09T09:00"),
+                "empresa-uno",
+            )
+        self.assertEqual(booking_error.exception.status_code, 403)
+
+    def test_manual_payment_extends_period_by_one_calendar_month(self) -> None:
+        conn = hola.get_db()
+        conn.execute("UPDATE companies SET paid_through = NULL WHERE company_id = 'empresa-uno'")
+        conn.commit()
+        conn.close()
+        with patch.object(hola, "ADMIN_KEY", "admin-test"), patch.object(
+            hola, "bogota_today", return_value=dt.date(2026, 11, 7)
+        ):
+            result = hola.owner_register_payment("empresa-uno", "admin-test")
+        self.assertEqual(result["paid_through"], "2026-12-07")
+
+    def test_calendar_month_end_uses_last_day_of_shorter_month(self) -> None:
+        self.assertEqual(hola.add_calendar_month(dt.date(2026, 1, 31)), dt.date(2026, 2, 28))
+        self.assertEqual(hola.add_calendar_month(dt.date(2028, 1, 31)), dt.date(2028, 2, 29))
 
     def test_closed_days_and_out_of_hours_cannot_be_booked(self) -> None:
         sunday = self.next_weekday(6)

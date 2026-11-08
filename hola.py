@@ -1,4 +1,5 @@
-﻿import datetime as dt
+import calendar
+import datetime as dt
 import base64
 import re
 import hashlib
@@ -196,6 +197,41 @@ def make_token(company_id: str, email: str) -> str:
   return secrets.token_urlsafe(32)
 
 
+def bogota_today() -> dt.date:
+    return dt.datetime.now(ZoneInfo("America/Bogota")).date()
+
+
+def add_calendar_month(value: dt.date) -> dt.date:
+    month_index = value.month % 12 + 1
+    year = value.year + (1 if value.month == 12 else 0)
+    day = min(value.day, calendar.monthrange(year, month_index)[1])
+    return dt.date(year, month_index, day)
+
+
+def company_service_active(company: dict[str, Any]) -> bool:
+    return company_service_active_on(company, bogota_today())
+
+
+def company_service_active_on(company: dict[str, Any], service_date: dt.date) -> bool:
+    if company.get("status") != "active":
+        return False
+    paid_through = company.get("paid_through")
+    if not paid_through:
+        return False
+    try:
+        return dt.date.fromisoformat(paid_through) >= service_date
+    except ValueError:
+        return False
+
+
+def company_service_message(company: dict[str, Any]) -> str:
+    if company.get("status") == "disabled":
+        return "Empresa inhabilitada por administración."
+    if not company.get("paid_through"):
+        return "Empresa inhabilitada. El servicio está pendiente del primer pago."
+    return "Empresa inhabilitada. El período pagado ha vencido."
+
+
 def initialize_db() -> None:
     conn = get_db()
     conn.execute(
@@ -227,6 +263,13 @@ def initialize_db() -> None:
     ):
         if column not in company_columns:
             conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {definition}")
+    if "paid_through" not in company_columns:
+        conn.execute("ALTER TABLE companies ADD COLUMN paid_through TEXT")
+        transition_expiry = add_calendar_month(bogota_today()).isoformat()
+        conn.execute(
+            "UPDATE companies SET paid_through = ? WHERE status = 'active'",
+            (transition_expiry,),
+        )
     conn.execute(
         "UPDATE companies SET weekly_hours = ? WHERE weekly_hours IS NULL OR weekly_hours = '{}'",
         (json.dumps(DEFAULT_WEEKLY_HOURS),),
@@ -326,14 +369,14 @@ def company_from_token(token: str | None) -> str:
         raise HTTPException(status_code=401, detail="Token requerido.")
     conn = get_db()
     row = conn.execute(
-      "SELECT sessions.company_id, companies.status FROM sessions JOIN companies USING (company_id) WHERE sessions.token = ?",
+      "SELECT sessions.company_id, companies.status, companies.paid_through FROM sessions JOIN companies USING (company_id) WHERE sessions.token = ?",
       (token,),
     ).fetchone()
     conn.close()
     if not row:
         raise HTTPException(status_code=401, detail="Sesión inválida.")
-    if row["status"] != "active":
-      raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+    if not company_service_active(dict(row)):
+      raise HTTPException(status_code=403, detail=company_service_message(dict(row)))
     return row["company_id"]
 
 
@@ -365,6 +408,9 @@ def public_company_listing(company: dict[str, Any]) -> dict[str, Any]:
         "sector_label": COMPANY_SECTORS[sector],
         "description": company.get("description") or company.get("about") or "",
         "profile_photo_url": company.get("profile_photo_url") or "",
+        "status": company.get("status", "disabled"),
+        "paid_through": company.get("paid_through"),
+        "service_active": company_service_active(company),
     }
 
 
@@ -511,6 +557,10 @@ def public_company_payload(company: dict[str, Any]) -> dict[str, Any]:
         "profile_photo_url": company["profile_photo_url"],
         "status": company["status"],
         "plan": company["plan_id"],
+        "weekly_hours": company_weekly_hours(company),
+        "paid_through": company.get("paid_through"),
+        "service_active": company_service_active(company),
+        "status_message": "" if company_service_active(company) else company_service_message(company),
     }
 
 
@@ -870,6 +920,7 @@ def workspace_page() -> str:
     .booking-chat-footer { display:grid; grid-template-columns:1fr auto; gap:10px; padding:12px; border-top:1px solid var(--border); }
     .company-panel { display:none; margin-top:18px; }
     .company-panel.visible { display:block; }
+    .company-signup-section.hidden { display:none; }
     .company-header { display:flex; justify-content:space-between; align-items:center; gap:14px; margin-bottom:18px; }
     .company-header h2 { margin:0; }
     .chat-layout { display:grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap:18px; }
@@ -890,13 +941,21 @@ def workspace_page() -> str:
     .appointment-status { display:inline-block; margin:4px 0 8px; padding:4px 8px; border:1px solid var(--border); border-radius:999px; color:var(--accent); font-size:11px; }
     .appointment-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
     .appointment-actions button { padding:7px 10px; font-size:12px; }
-    .hours-table, .slots-table { width:100%; border-collapse:collapse; margin-top:12px; }
-    .hours-table th, .hours-table td, .slots-table th, .slots-table td { padding:9px 7px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }
+    .hours-table { width:100%; border-collapse:collapse; margin-top:12px; }
+    .hours-table th, .hours-table td { padding:9px 7px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }
     .hours-table input[type=\"time\"] { width:100%; min-width:105px; padding:8px; }
-    .slots-table .slot-unavailable { color:var(--muted); text-decoration:line-through; opacity:.65; }
-    .slots-table .slot-selected { outline:2px solid var(--accent); outline-offset:-2px; border-radius:8px; }
-    .slot-select { padding:7px 10px; }
     .table-scroll { overflow-x:auto; }
+    .booking-options { display:flex; flex-wrap:wrap; gap:9px; margin-top:12px; }
+    .booking-option { min-width:82px; padding:10px 13px; border:1px solid var(--border); border-radius:12px; background:rgba(255,255,255,.03); color:var(--text); cursor:pointer; }
+    .booking-option:hover:not(:disabled), .booking-option.selected { background:var(--accent); border-color:var(--accent); color:#04252d; }
+    .booking-option:disabled { cursor:not-allowed; color:var(--muted); text-decoration:line-through; opacity:.55; }
+    .booking-day { min-width:104px; display:flex; flex-direction:column; gap:4px; }
+    .booking-day span { font-size:11px; opacity:.8; }
+    .booking-day.booking-day-closed { text-decoration:none; }
+    .booking-month-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+    .booking-month-controls button { padding:8px 12px; }
+    .booking-month-title { color:var(--text); font-weight:700; text-transform:capitalize; }
+    .booking-day.booking-day-unavailable { text-decoration:none; }
     button:disabled { opacity:.55; cursor:not-allowed; }
     @media (max-width: 980px) { .cards, .stats, .grid, .chat-layout, .meta-grid { grid-template-columns:1fr; } .case-grid, .steps, .plans { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media (max-width: 640px) { .public-tabs, .stats, .cards, .case-grid, .steps, .plans { grid-template-columns:1fr; } .topbar, .company-header { flex-direction:column; align-items:flex-start; } .site-nav { justify-content:flex-start; } .chat-footer { grid-template-columns:1fr; } }
@@ -970,7 +1029,7 @@ def workspace_page() -> str:
         <article class=\"plan-card featured\"><span class=\"case-tag\">Más elegido</span><h3>Professional</h3><p class=\"plan-price\">$79.900 <small>COP / mes</small></p><p>Hasta 500 respuestas del asistente IA al mes.</p><button class=\"primary-btn js-plan-target\" type=\"button\" data-plan=\"professional\">Elegir Professional</button></article>
         <article class=\"plan-card\"><span class=\"case-tag\">Mayor volumen</span><h3>Enterprise</h3><p class=\"plan-price\">$139.900 <small>COP / mes</small></p><p>Hasta 2.000 respuestas del asistente IA al mes.</p><button class=\"secondary-btn js-plan-target\" type=\"button\" data-plan=\"enterprise\">Elegir Enterprise</button></article>
       </div>
-      <p class=\"demo-note\">El límite se renueva al inicio de cada mes y cuenta las respuestas de Nexora IA. Las solicitudes de citas no consumen respuestas. El registro no procesa pagos. WhatsApp todavía no está incluido.</p>
+      <p class=\"demo-note\">El límite se renueva al inicio de cada mes y cuenta las respuestas de Nexora IA. Las solicitudes de citas no consumen respuestas. El registro no procesa pagos: administración confirma cada pago y la renovación mensual. Si vence el período, la empresa aparecerá inhabilitada hasta renovar. WhatsApp todavía no está incluido.</p>
     </section>
 
     <section class=\"section\" id=\"faq\">
@@ -986,39 +1045,38 @@ def workspace_page() -> str:
 
     <nav class=\"public-tabs\" aria-label=\"Secciones principales\">
       <button class=\"public-tab active\" type=\"button\" data-target=\"bookingSection\">Solicitar cita</button>
-      <button class=\"public-tab\" type=\"button\" data-target=\"directorySection\">Buscar empresa</button>
       <button class=\"public-tab\" type=\"button\" data-target=\"companyAccessSection\">Cuenta de empresa</button>
       <button class=\"public-tab\" type=\"button\" data-target=\"adminAccessSection\">Administrador</button>
     </nav>
 
-    <section class=\"panel public-section\" id=\"directorySection\">
-      <h2>Encuentra una empresa</h2>
-      <p class=\"subtitle\">Explora las empresas activas de Nexora por sector o búscalas por nombre.</p>
-      <div class=\"grid\" style=\"margin-top:16px;\">
-        <div class=\"field\"><label for=\"directorySector\">Sector</label><select id=\"directorySector\">
-          <option value=\"\">Todos los sectores</option>
-          <option value=\"gastronomico\">Gastronómico</option>
-          <option value=\"estetico\">Estético</option>
-          <option value=\"hoteleria\">Hotelería</option>
-          <option value=\"turismo\">Turismo</option>
-          <option value=\"salud\">Salud</option>
-          <option value=\"educacion\">Educación</option>
-          <option value=\"comercio\">Comercio y tiendas</option>
-          <option value=\"servicios_profesionales\">Servicios profesionales</option>
-          <option value=\"mascotas\">Mascotas y veterinaria</option>
-          <option value=\"automotriz\">Automotriz</option>
-          <option value=\"entretenimiento\">Entretenimiento y eventos</option>
-          <option value=\"inmobiliario\">Inmobiliario y construcción</option>
-          <option value=\"tecnologia\">Tecnología</option>
-          <option value=\"otro\">Otro</option>
-        </select></div>
-        <div class=\"field\"><label for=\"directorySearch\">Nombre de la empresa</label><input id=\"directorySearch\" type=\"search\" placeholder=\"Ej. Café Central\"></div>
-      </div>
-      <div id=\"directoryStatus\" class=\"notice\" role=\"status\">Cargando empresas...</div>
-      <div id=\"directoryResults\" class=\"directory-grid\" aria-live=\"polite\"></div>
-    </section>
-
     <section class=\"panel public-section active\" id=\"bookingSection\">
+      <div class=\"mini-panel\" style=\"margin-bottom:18px;\">
+        <h2>Encuentra una empresa</h2>
+        <p>Busca por sector o nombre y elige una empresa para escribirle o solicitar una cita, sin necesitar su código.</p>
+        <div class=\"grid\" style=\"margin-top:16px;\">
+          <div class=\"field\"><label for=\"directorySector\">Sector</label><select id=\"directorySector\">
+            <option value=\"\">Todos los sectores</option>
+            <option value=\"gastronomico\">Gastronómico</option>
+            <option value=\"estetico\">Estético</option>
+            <option value=\"hoteleria\">Hotelería</option>
+            <option value=\"turismo\">Turismo</option>
+            <option value=\"salud\">Salud</option>
+            <option value=\"educacion\">Educación</option>
+            <option value=\"comercio\">Comercio y tiendas</option>
+            <option value=\"servicios_profesionales\">Servicios profesionales</option>
+            <option value=\"mascotas\">Mascotas y veterinaria</option>
+            <option value=\"automotriz\">Automotriz</option>
+            <option value=\"entretenimiento\">Entretenimiento y eventos</option>
+            <option value=\"inmobiliario\">Inmobiliario y construcción</option>
+            <option value=\"tecnologia\">Tecnología</option>
+            <option value=\"otro\">Otro</option>
+          </select></div>
+          <div class=\"field\"><label for=\"directorySearch\">Nombre de la empresa</label><input id=\"directorySearch\" type=\"search\" placeholder=\"Ej. Café Central\"></div>
+        </div>
+        <div id=\"directoryStatus\" class=\"notice\" role=\"status\">Cargando empresas...</div>
+        <div id=\"directoryResults\" class=\"directory-grid\" aria-live=\"polite\"></div>
+      </div>
+
       <div class=\"company-profile-card\" id=\"companyProfileCard\">
         <img id=\"companyProfileImage\" alt=\"Logo\" src=\"\" />
         <div>
@@ -1030,7 +1088,7 @@ def workspace_page() -> str:
       <div style=\"padding:18px;border:1px solid var(--border);border-radius:16px;background:rgba(89,247,211,0.04);margin-bottom:18px;\">
         <div style=\"display:inline-block;margin-bottom:10px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);font-weight:700;\">Flujo recomendado</div>
         <div style=\"display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;\">
-          <span style=\"padding:7px 10px;border-radius:999px;border:1px solid rgba(89,247,211,0.2);background:rgba(5,17,24,0.8);color:var(--text);font-size:12px;\">1. Elige servicio</span>
+          <span style=\"padding:7px 10px;border-radius:999px;border:1px solid rgba(89,247,211,0.2);background:rgba(5,17,24,0.8);color:var(--text);font-size:12px;\">1. Elige día y hora</span>
           <span style=\"padding:7px 10px;border-radius:999px;border:1px solid rgba(89,247,211,0.2);background:rgba(5,17,24,0.8);color:var(--text);font-size:12px;\">2. Envía solicitud</span>
           <span style=\"padding:7px 10px;border-radius:999px;border:1px solid rgba(89,247,211,0.2);background:rgba(5,17,24,0.8);color:var(--text);font-size:12px;\">3. El negocio te contacta</span>
         </div>
@@ -1041,23 +1099,31 @@ def workspace_page() -> str:
         <div class=\"field\"><label>Código de la empresa</label><input id=\"bookCompany\" type=\"text\"></div>
         <div class=\"field\"><label>Nombre</label><input id=\"bookName\" type=\"text\"></div>
         <div class=\"field\"><label>Teléfono</label><input id=\"bookPhone\" type=\"text\"></div>
-        <div class=\"field\"><label>Fecha</label><input id=\"bookDate\" type=\"date\"></div>
+        <input id=\"bookDate\" type=\"hidden\">
         <div class=\"field\" style=\"grid-column:1 / -1;\">
-          <label>Horarios disponibles</label>
-          <div id=\"availabilityMessage\" class=\"notice\" role=\"status\">Ingresa el código de la empresa y una fecha para consultar sus horarios.</div>
-          <div class=\"table-scroll\"><table class=\"slots-table\" aria-label=\"Horarios disponibles\"><thead><tr><th>Hora</th><th>Disponibilidad</th><th></th></tr></thead><tbody id=\"availabilitySlots\"><tr><td colspan=\"3\">Selecciona una empresa y fecha.</td></tr></tbody></table></div>
+          <label>Día de la cita</label>
+          <div class=\"booking-month-controls\" aria-label=\"Cambiar mes del calendario\">
+            <button id=\"bookingPreviousMonth\" class=\"secondary-btn\" type=\"button\" aria-label=\"Mes anterior\">‹</button>
+            <span id=\"bookingMonthTitle\" class=\"booking-month-title\"></span>
+            <button id=\"bookingNextMonth\" class=\"secondary-btn\" type=\"button\" aria-label=\"Mes siguiente\">›</button>
+          </div>
+          <div id=\"bookingDays\" class=\"booking-options\" aria-label=\"Días disponibles para cita\"><span>Elige una empresa para ver los días disponibles.</span></div>
+          <label style=\"display:block;margin-top:18px;\">Hora de la cita</label>
+          <div id=\"availabilityMessage\" class=\"notice\" role=\"status\">Selecciona una empresa y un día.</div>
+          <p>Las horas reservadas aparecen tachadas y deshabilitadas. La disponibilidad se actualiza automáticamente.</p>
+          <div id=\"availabilitySlots\" class=\"booking-options\" aria-label=\"Horas disponibles para cita\"><span>Primero selecciona un día.</span></div>
           <input id=\"bookTime\" type=\"hidden\">
         </div>
         <div class=\"field\" style=\"grid-column:1 / -1;\"><label>Motivo</label><input id=\"bookReason\" type=\"text\"></div>
 
         <div class=\"booking-chat\" id=\"demo-chat\" style=\"grid-column:1 / -1;scroll-margin-top:20px;\">
           <div class=\"booking-chat-header\">Habla con la empresa</div>
-          <div class=\"field\" style=\"padding: 14px 14px 0;\"><label>Código de la empresa destinataria</label><input id=\"chatCompanyCode\" type=\"text\" placeholder=\"Pide el código a la empresa\"></div>
+          <div class=\"field\" style=\"padding: 14px 14px 0;\"><label>Empresa destinataria</label><input id=\"chatCompanyCode\" type=\"text\" placeholder=\"Elige una empresa arriba o ingresa su código\"></div>
           <div class=\"booking-chat-body\" id=\"publicChatMessages\"><div class=\"booking-chat-message ai\">Hola. Pregúntame por horarios, servicios o cómo agendar tu cita.</div></div>
-          <div class=\"booking-chat-footer\"><input id=\"publicChatInput\" type=\"text\" placeholder=\"Escribe tu mensaje\"><button id=\"publicChatSend\" class=\"secondary-btn\" type=\"button\">Enviar</button></div>
+          <div class=\"booking-chat-footer\"><input id=\"publicChatInput\" type=\"text\" placeholder=\"Escribe tu mensaje\" disabled><button id=\"publicChatSend\" class=\"secondary-btn\" type=\"button\" disabled>Enviar</button></div>
         </div>
 
-        <div class=\"field\" style=\"grid-column:1 / -1;\"><button id=\"bookSubmit\" class=\"primary-btn\" type=\"button\">Solicitar cita</button><div id=\"bookMsg\" class=\"notice\"></div></div>
+        <div class=\"field\" style=\"grid-column:1 / -1;\"><button id=\"bookSubmit\" class=\"primary-btn\" type=\"button\" disabled>Solicitar cita</button><div id=\"bookMsg\" class=\"notice\"></div></div>
       </div>
     </section>
 
@@ -1069,7 +1135,7 @@ def workspace_page() -> str:
         <div class=\"field\" style=\"grid-column:1 / -1;\"><button id=\"loginSubmit\" class=\"primary-btn\" type=\"button\">Iniciar sesión</button><div id=\"loginMsg\" class=\"notice\"></div></div>
       </div>
 
-      <div class=\"grid\" style=\"margin-top:22px;\">
+      <div id=\"companySignupSection\" class=\"grid company-signup-section\" style=\"margin-top:22px;\">
         <div id=\"signupForm\" class=\"field\"><label>Código único</label><input id=\"signupId\" type=\"text\"></div>
         <div class=\"field\"><label>Nombre de la empresa</label><input id=\"signupName\" type=\"text\"></div>
         <div class=\"field\"><label for=\"signupSector\">Sector</label><select id=\"signupSector\" required>
@@ -1175,6 +1241,13 @@ def workspace_page() -> str:
     let companyToken = '';
     let adminKey = '';
     let currentAvailabilitySlots = [];
+    let currentBookingSchedule = {};
+    let currentCompanyPaidThrough = '';
+    let currentCompanyServiceActive = false;
+    let currentCompanyStatusMessage = '';
+    let currentBookingMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    let companyProfileRequestId = 0;
+    let availabilityRequestId = 0;
 
     function showSection(sectionId) {
       document.querySelectorAll('.public-section').forEach((section) => {
@@ -1404,69 +1477,159 @@ def workspace_page() -> str:
     function renderAvailability(slots) {
       currentAvailabilitySlots = slots;
       const body = document.getElementById('availabilitySlots');
-      const selected = document.getElementById('bookTime').value;
+      const selectedInput = document.getElementById('bookTime');
+      const selected = selectedInput.value;
+      const selectionLost = Boolean(selected && !slots.some((slot) => slot.starts_at === selected && slot.available));
+      if (selectionLost) selectedInput.value = '';
       body.replaceChildren();
       if (!slots.length) {
-        const row = body.insertRow();
-        const cell = row.insertCell();
-        cell.colSpan = 3;
-        cell.textContent = 'No hay horarios disponibles para esta fecha.';
-        return;
+        const empty = document.createElement('span');
+        empty.textContent = 'No hay horas disponibles para este día.';
+        body.appendChild(empty);
+        return selectionLost;
       }
       slots.forEach((slot) => {
-        const row = body.insertRow();
-        const timeCell = row.insertCell();
-        timeCell.textContent = slot.starts_at.slice(11, 16);
-        const stateCell = row.insertCell();
-        const actionCell = row.insertCell();
-        if (slot.available) {
-          stateCell.textContent = 'Libre';
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'secondary-btn slot-select';
-          button.dataset.slotTime = slot.starts_at;
-          button.textContent = selected === slot.starts_at ? 'Seleccionada' : 'Elegir';
-          if (selected === slot.starts_at) row.classList.add('slot-selected');
-          actionCell.appendChild(button);
-        } else {
-          row.classList.add('slot-unavailable');
-          stateCell.textContent = 'Ocupada';
-          const crossed = document.createElement('del');
-          crossed.textContent = 'No disponible';
-          actionCell.appendChild(crossed);
-        }
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'booking-option';
+        button.dataset.slotTime = slot.starts_at;
+        button.textContent = slot.available ? slot.starts_at.slice(11, 16) : `${slot.starts_at.slice(11, 16)} · Reservada`;
+        button.disabled = !slot.available;
+        button.setAttribute('aria-pressed', String(selected === slot.starts_at));
+        if (selected === slot.starts_at) button.classList.add('selected');
+        body.appendChild(button);
       });
+      return selectionLost;
     }
 
-    async function loadAvailability() {
+    function renderBookingDays(schedule, resetSelection = false) {
+      const container = document.getElementById('bookingDays');
+      const selectedDate = document.getElementById('bookDate');
+      currentBookingSchedule = schedule && typeof schedule === 'object' ? schedule : {};
+      if (resetSelection) {
+        selectedDate.value = '';
+        document.getElementById('bookTime').value = '';
+        renderAvailability([]);
+      }
+      container.replaceChildren();
+      const openDays = currentBookingSchedule;
+      const monthTitle = document.getElementById('bookingMonthTitle');
+      const monthFormatter = new Intl.DateTimeFormat('es-CO', { month: 'long', year: 'numeric' });
+      monthTitle.textContent = monthFormatter.format(currentBookingMonth);
+      const today = new Date();
+      const todayLabel = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const paidThrough = currentCompanyPaidThrough ? new Date(`${currentCompanyPaidThrough}T00:00:00`) : null;
+      const lastAllowedMonth = paidThrough
+        ? new Date(paidThrough.getFullYear(), paidThrough.getMonth(), 1)
+        : currentBookingMonth;
+      const monthStart = new Date(currentBookingMonth.getFullYear(), currentBookingMonth.getMonth(), 1);
+      document.getElementById('bookingPreviousMonth').disabled =
+        monthStart <= new Date(todayLabel.getFullYear(), todayLabel.getMonth(), 1);
+      document.getElementById('bookingNextMonth').disabled =
+        !currentCompanyServiceActive || monthStart >= lastAllowedMonth;
+      if (!Object.values(openDays).some(Boolean)) {
+        const empty = document.createElement('span');
+        empty.textContent = 'Esta empresa todavía no ha configurado sus días de atención.';
+        container.appendChild(empty);
+        return;
+      }
+      const firstDay = new Date(currentBookingMonth.getFullYear(), currentBookingMonth.getMonth(), 1);
+      const daysInMonth = new Date(currentBookingMonth.getFullYear(), currentBookingMonth.getMonth() + 1, 0).getDate();
+      for (let day = 1; day <= daysInMonth; day += 1) {
+        const date = new Date(firstDay.getFullYear(), firstDay.getMonth(), day);
+        const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const isOpen = Boolean(openDays[weekdayKeys[date.getDay()]]);
+        const isPast = date < todayLabel;
+        const dateValue = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const isWithinPaidPeriod = currentCompanyServiceActive && paidThrough && date <= paidThrough;
+        const isSelectable = isOpen && !isPast && Boolean(isWithinPaidPeriod);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `booking-option booking-day${isOpen ? '' : ' booking-day-closed'}${isOpen && !isSelectable ? ' booking-day-unavailable' : ''}`;
+        button.disabled = !isSelectable;
+        if (isSelectable) button.dataset.bookingDate = dateValue;
+        const weekday = document.createElement('strong');
+        weekday.textContent = new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric' }).format(date);
+        const label = document.createElement('span');
+        label.textContent = !isOpen
+          ? 'Cerrado'
+          : isPast ? 'Pasó'
+          : !isWithinPaidPeriod ? 'Fuera del período pagado'
+          : dateValue === selectedDate.value ? 'Seleccionado' : 'Ver horarios';
+        button.append(weekday, label);
+        button.setAttribute('aria-label', `${weekday.textContent}: ${label.textContent}`);
+        if (dateValue === selectedDate.value) button.classList.add('selected');
+        container.appendChild(button);
+      }
+    }
+
+    async function loadAvailability(preserveSelection = false) {
       const companyId = document.getElementById('bookCompany').value.trim();
       const bookingDate = document.getElementById('bookDate').value;
       const status = document.getElementById('availabilityMessage');
-      document.getElementById('bookTime').value = '';
+      const requestId = ++availabilityRequestId;
+      if (!preserveSelection) document.getElementById('bookTime').value = '';
+      if (companyId && !currentCompanyServiceActive) {
+        status.textContent = currentCompanyStatusMessage || 'Empresa inhabilitada.';
+        renderAvailability([]);
+        return;
+      }
       if (!companyId || !bookingDate) {
-        status.textContent = 'Ingresa el código de la empresa y una fecha para consultar sus horarios.';
+        status.textContent = !companyId
+          ? 'Elige una empresa para consultar sus horarios.'
+          : 'Elige un día de atención para ver las horas disponibles.';
         renderAvailability([]);
         return;
       }
-      status.textContent = 'Consultando horarios...';
-      const response = await fetch(`/companies/${encodeURIComponent(companyId)}/availability?date=${encodeURIComponent(bookingDate)}`);
-      const data = await response.json();
-      if (!response.ok) {
-        status.textContent = errorMessage(data, 'No se pudieron consultar los horarios.');
-        renderAvailability([]);
-        return;
+      if (!preserveSelection) status.textContent = 'Consultando horarios...';
+      try {
+        const response = await fetch(`/companies/${encodeURIComponent(companyId)}/availability?date=${encodeURIComponent(bookingDate)}`);
+        const data = await response.json();
+        if (requestId !== availabilityRequestId
+            || companyId !== document.getElementById('bookCompany').value.trim()
+            || bookingDate !== document.getElementById('bookDate').value) return;
+        if (!response.ok) {
+          status.textContent = errorMessage(data, 'No se pudieron consultar los horarios.');
+          renderAvailability([]);
+          if (response.status === 403) {
+            currentCompanyServiceActive = false;
+            currentCompanyStatusMessage = status.textContent;
+            document.getElementById('publicChatInput').disabled = true;
+            document.getElementById('publicChatSend').disabled = true;
+            document.getElementById('bookSubmit').disabled = true;
+            renderBookingDays(currentBookingSchedule);
+          }
+          return;
+        }
+        const selectionLost = renderAvailability(data.slots);
+        status.textContent = selectionLost
+          ? 'Ese horario acaba de ser reservado por otro cliente. Elige otro horario libre.'
+          : `Citas de ${data.duration_minutes} minutos. Los horarios se actualizan automáticamente.`;
+      } catch {
+        if (requestId === availabilityRequestId) {
+          status.textContent = 'No fue posible actualizar los horarios. Vuelve a intentarlo.';
+        }
       }
-      status.textContent = `Citas de ${data.duration_minutes} minutos. Selecciona un horario libre.`;
-      renderAvailability(data.slots);
     }
 
     async function loadPublicCompanyProfile(companyId) {
+      const requestId = ++companyProfileRequestId;
       if (!companyId) {
         const card = document.getElementById('companyProfileCard');
         if (card) card.classList.remove('visible');
+        currentCompanyPaidThrough = '';
+        currentCompanyServiceActive = false;
+        currentCompanyStatusMessage = '';
+        currentBookingMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        document.getElementById('publicChatInput').disabled = true;
+        document.getElementById('publicChatSend').disabled = true;
+        document.getElementById('bookSubmit').disabled = true;
+        renderBookingDays({}, true);
         return;
       }
       const response = await fetch('/companies/' + companyId + '/public');
+      if (requestId !== companyProfileRequestId
+          || companyId !== document.getElementById('bookCompany').value.trim()) return;
       const card = document.getElementById('companyProfileCard');
       const image = document.getElementById('companyProfileImage');
       const name = document.getElementById('companyProfileName');
@@ -1474,12 +1637,33 @@ def workspace_page() -> str:
       if (!card || !image || !name || !description) return;
       if (!response.ok) {
         card.classList.remove('visible');
+        currentCompanyPaidThrough = '';
+        currentCompanyServiceActive = false;
+        currentCompanyStatusMessage = 'No encontramos esa empresa activa. Verifica el código o búscala por sector.';
+        renderBookingDays({}, true);
+        document.getElementById('availabilityMessage').textContent = currentCompanyStatusMessage;
+        document.getElementById('publicChatInput').disabled = true;
+        document.getElementById('publicChatSend').disabled = true;
+        document.getElementById('bookSubmit').disabled = true;
         return;
       }
       const data = await response.json();
+      if (requestId !== companyProfileRequestId
+          || companyId !== document.getElementById('bookCompany').value.trim()) return;
       image.src = data.profile_photo_url || 'https://via.placeholder.com/120x120/0b202d/59f7d3?text=' + encodeURIComponent(data.name || 'Empresa');
       name.textContent = data.name || 'Empresa';
       description.textContent = data.description || data.about || 'La empresa aún no ha agregado una descripción pública.';
+      currentCompanyPaidThrough = data.paid_through || '';
+      currentCompanyServiceActive = Boolean(data.service_active);
+      currentCompanyStatusMessage = data.status_message || '';
+      currentBookingMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      renderBookingDays(data.weekly_hours || {}, true);
+      document.getElementById('availabilityMessage').textContent = currentCompanyServiceActive
+        ? `Servicio activo hasta el ${currentCompanyPaidThrough}. Elige un día disponible.`
+        : (data.status_message || 'Empresa inhabilitada.');
+      document.getElementById('publicChatInput').disabled = !currentCompanyServiceActive;
+      document.getElementById('publicChatSend').disabled = !currentCompanyServiceActive;
+      document.getElementById('bookSubmit').disabled = !currentCompanyServiceActive;
       card.classList.add('visible');
     }
 
@@ -1502,7 +1686,7 @@ def workspace_page() -> str:
         }
         results.replaceChildren();
         if (!data.length) {
-          status.textContent = 'No encontramos empresas activas con esos filtros.';
+            status.textContent = 'No encontramos empresas con esos filtros.';
           return;
         }
         status.textContent = `${data.length} empresa${data.length === 1 ? '' : 's'} encontrada${data.length === 1 ? '' : 's'}.`;
@@ -1518,9 +1702,10 @@ def workspace_page() -> str:
           description.textContent = company.description || 'Esta empresa aún no ha agregado una descripción.';
           const select = document.createElement('button');
           select.type = 'button';
-          select.className = 'primary-btn';
-          select.dataset.directoryCompany = company.company_id;
-          select.textContent = 'Elegir esta empresa';
+          select.className = company.service_active ? 'primary-btn' : 'secondary-btn';
+          select.disabled = !company.service_active;
+          if (company.service_active) select.dataset.directoryCompany = company.company_id;
+          select.textContent = company.service_active ? 'Escribirle / solicitar cita' : 'Empresa inhabilitada';
           card.append(sectorTag, title, description, select);
           results.appendChild(card);
         });
@@ -1567,6 +1752,7 @@ def workspace_page() -> str:
       }
       companyToken = data.token;
       document.getElementById('companySpace').classList.add('visible');
+      document.getElementById('companySignupSection').classList.add('hidden');
       document.getElementById('loginMsg').textContent = 'Sesión iniciada correctamente.';
       await loadDashboard();
     }
@@ -1640,6 +1826,7 @@ def workspace_page() -> str:
     function logoutCompany() {
       companyToken = '';
       document.getElementById('companySpace').classList.remove('visible');
+      document.getElementById('companySignupSection').classList.remove('hidden');
       document.getElementById('loginMsg').textContent = 'Sesión cerrada.';
     }
 
@@ -1679,7 +1866,7 @@ def workspace_page() -> str:
       const clientName = document.getElementById('bookName').value.trim();
       const startsAt = document.getElementById('bookTime').value;
       if (!companyId || !clientName || !startsAt) {
-        document.getElementById('bookMsg').textContent = 'Completa tus datos y selecciona un horario disponible de la tabla.';
+        document.getElementById('bookMsg').textContent = 'Completa tus datos y selecciona un horario disponible.';
         return;
       }
       const payload = {
@@ -1695,7 +1882,7 @@ def workspace_page() -> str:
       });
       const data = await response.json();
       document.getElementById('bookMsg').textContent = response.ok ? 'Solicitud enviada. La empresa revisará y confirmará la cita.' : errorMessage(data, 'No se pudo registrar la cita.');
-      if (response.ok) await loadAvailability();
+      await loadAvailability(response.ok || response.status === 409);
     }
 
     async function sendPublicChat() {
@@ -1769,9 +1956,15 @@ def workspace_page() -> str:
         row.className = 'list-item';
         const title = document.createElement('strong');
         title.textContent = item.name;
-        row.append(title, document.createTextNode(`${item.company_id} · ${item.status} · ${item.plan}`));
+        row.append(title, document.createTextNode(`${item.company_id} · ${item.service_active ? 'Activa' : 'Inhabilitada'} · ${item.plan} · Vigente hasta: ${item.paid_through || 'sin pago'}`));
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:8px;margin-top:10px';
+        const paymentButton = document.createElement('button');
+        paymentButton.type = 'button';
+        paymentButton.className = 'primary-btn';
+        paymentButton.dataset.paymentAction = item.company_id;
+        paymentButton.textContent = 'Registrar pago / renovar 1 mes';
+        actions.appendChild(paymentButton);
         [['Activar', 'active', 'primary-btn'], ['Desactivar', 'disabled', 'secondary-btn']].forEach(([label, status, className]) => {
           const button = document.createElement('button');
           button.type = 'button';
@@ -1788,6 +1981,24 @@ def workspace_page() -> str:
     async function toggleStatus(companyId, status) {
       if (!adminKey) return;
       const response = await fetch('/owner/status/' + companyId + '/' + status, { method: 'POST', headers: { 'X-Admin-Key': adminKey } });
+      const data = await response.json();
+      if (!response.ok) {
+        document.getElementById('adminMsg').textContent = errorMessage(data, 'No se pudo actualizar el estado.');
+        return;
+      }
+      await loadCompanies();
+    }
+
+    async function registerCompanyPayment(companyId) {
+      if (!adminKey) return;
+      const response = await fetch('/owner/payment/' + encodeURIComponent(companyId), {
+        method: 'POST',
+        headers: { 'X-Admin-Key': adminKey }
+      });
+      const data = await response.json();
+      document.getElementById('adminMsg').textContent = response.ok
+        ? `Pago registrado. Servicio vigente hasta ${data.paid_through}.`
+        : errorMessage(data, 'No se pudo registrar el pago.');
       if (response.ok) await loadCompanies();
     }
 
@@ -1798,10 +2009,15 @@ def workspace_page() -> str:
       if (directoryCompanyId) {
         document.getElementById('bookCompany').value = directoryCompanyId;
         document.getElementById('chatCompanyCode').value = directoryCompanyId;
-        document.getElementById('bookMsg').textContent = 'Empresa seleccionada. Ya puedes consultar horarios, reservar o escribir por el chat.';
+        document.getElementById('bookMsg').textContent = 'Empresa seleccionada. Puedes escribirle en el chat o solicitar una cita.';
+        const chatMessages = document.getElementById('publicChatMessages');
+        chatMessages.replaceChildren();
+        const greeting = document.createElement('div');
+        greeting.className = 'booking-chat-message ai';
+        greeting.textContent = 'Hola. Pregúntame por servicios, horarios o cómo agendar tu cita.';
+        chatMessages.appendChild(greeting);
         await loadPublicCompanyProfile(directoryCompanyId);
-        showSection('bookingSection');
-        document.getElementById('bookingSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('demo-chat').scrollIntoView({ behavior: 'smooth', block: 'start' });
         await loadAvailability();
         return;
       }
@@ -1809,6 +2025,25 @@ def workspace_page() -> str:
       if (selectedSlot) {
         document.getElementById('bookTime').value = selectedSlot;
         renderAvailability(currentAvailabilitySlots);
+        return;
+      }
+      if (target.id === 'bookingPreviousMonth' || target.id === 'bookingNextMonth') {
+        currentBookingMonth.setMonth(currentBookingMonth.getMonth() + (target.id === 'bookingNextMonth' ? 1 : -1));
+        document.getElementById('bookDate').value = '';
+        document.getElementById('bookTime').value = '';
+        renderBookingDays(currentBookingSchedule);
+        renderAvailability([]);
+        document.getElementById('availabilityMessage').textContent = currentCompanyServiceActive
+          ? 'Elige un día de atención para ver las horas disponibles.'
+          : 'Empresa inhabilitada.';
+        return;
+      }
+      const selectedDate = target.closest('[data-booking-date]')?.dataset.bookingDate;
+      if (selectedDate) {
+        document.getElementById('bookDate').value = selectedDate;
+        document.getElementById('bookTime').value = '';
+        renderBookingDays(currentBookingSchedule);
+        await loadAvailability();
         return;
       }
       const appointmentAction = target.dataset.appointmentStatus;
@@ -1840,6 +2075,11 @@ def workspace_page() -> str:
       if (action) {
         const [companyId, status] = action.split('|');
         if (companyId && status) await toggleStatus(companyId, status);
+        return;
+      }
+      const paymentCompanyId = target.dataset.paymentAction;
+      if (paymentCompanyId) {
+        await registerCompanyPayment(paymentCompanyId);
       }
     });
 
@@ -1870,11 +2110,23 @@ def workspace_page() -> str:
       if (el) el.addEventListener('input', updatePreview);
     });
     const companyCodeInput = document.getElementById('bookCompany');
-    if (companyCodeInput) companyCodeInput.addEventListener('input', () => loadPublicCompanyProfile(companyCodeInput.value.trim()));
+    if (companyCodeInput) companyCodeInput.addEventListener('input', () => {
+      document.getElementById('bookTime').value = '';
+      loadPublicCompanyProfile(companyCodeInput.value.trim());
+    });
     if (companyCodeInput) companyCodeInput.addEventListener('change', loadAvailability);
-    document.getElementById('bookDate').addEventListener('change', loadAvailability);
-    const today = new Date();
-    document.getElementById('bookDate').min = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    window.setInterval(() => {
+      if (document.visibilityState === 'visible'
+          && document.getElementById('bookingSection').classList.contains('active')) {
+        loadAvailability(true);
+      }
+    }, 10000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible'
+          && document.getElementById('bookingSection').classList.contains('active')) {
+        loadAvailability(true);
+      }
+    });
     document.querySelectorAll('#weeklyHoursRows input[type="checkbox"]').forEach((checkbox) => {
       checkbox.addEventListener('change', () => {
         checkbox.closest('tr').querySelectorAll('input[type="time"]').forEach((field) => {
@@ -1969,7 +2221,12 @@ def signup(payload: CompanySignup) -> dict[str, Any]:
         conn.commit()
         conn.close()
     amount = PLAN_PRICES_COP[payload.plan_id]
-    return {"message": "Empresa registrada correctamente", "plan": payload.plan_id, "amount_cop": amount}
+    return {
+        "message": "Empresa registrada. El servicio quedará pendiente hasta confirmar el primer pago.",
+        "plan": payload.plan_id,
+        "amount_cop": amount,
+        "service_active": False,
+    }
 
 
 @app.post("/login")
@@ -1982,8 +2239,8 @@ def login(payload: CompanyLogin) -> dict[str, str]:
     password_valid, upgraded_hash = verify_password(payload.password, row["password_hash"])
     if not password_valid:
         raise HTTPException(status_code=401, detail="Credenciales inválidas.")
-    if row["status"] != "active":
-        raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+    if not company_service_active(dict(row)):
+        raise HTTPException(status_code=403, detail=company_service_message(dict(row)))
     token = make_token(row["company_id"], row["email"])
     conn = get_db()
     if upgraded_hash:
@@ -2013,13 +2270,48 @@ def owner_companies(x_admin_key: Annotated[str | None, Header()] = None) -> list
     return [public_company_payload(dict(row)) for row in rows]
 
 
+@app.post("/owner/payment/{company_id}")
+def owner_register_payment(company_id: str, x_admin_key: Annotated[str | None, Header()] = None) -> dict[str, str]:
+    if not ADMIN_KEY or x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Clave de administrador inválida.")
+    with database_lock:
+        conn = get_db()
+        row = conn.execute(
+            "SELECT paid_through FROM companies WHERE company_id = ?",
+            (company_id,),
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Empresa no encontrada.")
+        today = bogota_today()
+        try:
+            current_expiry = dt.date.fromisoformat(row["paid_through"]) if row["paid_through"] else None
+        except ValueError as exc:
+            conn.close()
+            raise HTTPException(status_code=409, detail="La fecha de vencimiento guardada no es válida.") from exc
+        renewal_start = current_expiry if current_expiry and current_expiry >= today else today
+        paid_through = add_calendar_month(renewal_start).isoformat()
+        conn.execute(
+            "UPDATE companies SET paid_through = ? WHERE company_id = ?",
+            (paid_through, company_id),
+        )
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "company_id": company_id, "paid_through": paid_through}
+
+
 @app.post("/owner/status/{company_id}/{status}")
 def owner_status(company_id: str, status: str, x_admin_key: Annotated[str | None, Header()] = None) -> dict[str, str]:
     if not ADMIN_KEY or x_admin_key != ADMIN_KEY:
         raise HTTPException(status_code=401, detail="Clave de administrador inválida.")
     if status not in {"active", "disabled"}:
         raise HTTPException(status_code=400, detail="Estado inválido.")
-    conn = get_db(); conn.execute("UPDATE companies SET status = ? WHERE company_id = ?", (status, company_id)); conn.commit(); conn.close()
+    conn = get_db()
+    cursor = conn.execute("UPDATE companies SET status = ? WHERE company_id = ?", (status, company_id))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Empresa no encontrada.")
+    conn.commit(); conn.close()
     return {"status": status, "company_id": company_id}
 
 
@@ -2203,7 +2495,7 @@ def calendar_callback(
         (oauth_state["company_id"],),
     ).fetchall()
     company = conn.execute(
-        "SELECT status FROM companies WHERE company_id = ?",
+        "SELECT status, paid_through FROM companies WHERE company_id = ?",
         (oauth_state["company_id"],),
     ).fetchone()
     conn.close()
@@ -2214,8 +2506,8 @@ def calendar_callback(
         )
         for row in sessions
     )
-    if not valid_session or not company or company["status"] != "active":
-        return calendar_popup_response(False, "Tu sesión ya no está activa. Inicia sesión e inténtalo otra vez.")
+    if not valid_session or not company or not company_service_active(dict(company)):
+        return calendar_popup_response(False, "Tu sesión ya no está activa o el servicio venció. Inicia sesión e inténtalo otra vez.")
     if error or not code:
         return calendar_popup_response(False, "No se autorizó Google Calendar. Puedes volver a intentarlo.")
     try:
@@ -2335,9 +2627,11 @@ def create_booking(payload: AppointmentRequest, x_company_id: Annotated[str | No
     company = company_record(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada.")
-    if company["status"] != "active":
-        raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+    if not company_service_active(company):
+        raise HTTPException(status_code=403, detail=company_service_message(company))
     starts_at = local_datetime(payload.starts_at)
+    if not company_service_active_on(company, starts_at.date()):
+        raise HTTPException(status_code=403, detail="La fecha está fuera del período pagado de la empresa.")
     if starts_at.second or starts_at.microsecond:
         raise HTTPException(status_code=400, detail="Selecciona una hora exacta de la tabla de disponibilidad.")
     normalized_start = starts_at.isoformat(timespec="minutes")
@@ -2351,8 +2645,10 @@ def create_booking(payload: AppointmentRequest, x_company_id: Annotated[str | No
             if not current_company_row:
                 raise HTTPException(status_code=404, detail="Empresa no encontrada.")
             current_company = dict(current_company_row)
-            if current_company["status"] != "active":
-                raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+            if not company_service_active(current_company):
+                raise HTTPException(status_code=403, detail=company_service_message(current_company))
+            if not company_service_active_on(current_company, starts_at.date()):
+                raise HTTPException(status_code=403, detail="La fecha está fuera del período pagado de la empresa.")
             slots = available_slots(current_company, starts_at.date(), conn)
             if not any(slot["starts_at"] == normalized_start and slot["available"] for slot in slots):
                 raise HTTPException(
@@ -2389,8 +2685,8 @@ def assistant(payload: MessageRequest, x_company_id: Annotated[str | None, Heade
     company = company_record(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada.")
-    if company["status"] != "active":
-      raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+    if not company_service_active(company):
+      raise HTTPException(status_code=403, detail=company_service_message(company))
     reply_limit = plan_ai_reply_limit(company["plan_id"])
     if monthly_ai_reply_count(company_id) >= reply_limit:
         raise HTTPException(
@@ -2439,8 +2735,6 @@ def public_company(company_id: str) -> dict[str, Any]:
     company = company_record(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada.")
-    if company["status"] == "disabled":
-        raise HTTPException(status_code=403, detail="La empresa está desactivada.")
     return public_company_payload(company)
 
 
@@ -2451,7 +2745,7 @@ def public_companies(sector: str | None = None, q: str = "") -> list[dict[str, A
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT company_id, name, sector, description, about, profile_photo_url FROM companies WHERE status = 'active' ORDER BY name COLLATE NOCASE"
+            "SELECT company_id, name, sector, description, about, profile_photo_url, status, paid_through FROM companies ORDER BY name COLLATE NOCASE"
         ).fetchall()
     finally:
         conn.close()
@@ -2473,12 +2767,14 @@ def company_availability(company_id: str, date: str) -> dict[str, Any]:
     company = company_record(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada.")
-    if company["status"] != "active":
-        raise HTTPException(status_code=403, detail="La empresa está desactivada.")
+    if not company_service_active(company):
+        raise HTTPException(status_code=403, detail=company_service_message(company))
     try:
         booking_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="La fecha debe tener formato AAAA-MM-DD.") from exc
+    if not company_service_active_on(company, booking_date):
+        raise HTTPException(status_code=403, detail="La fecha está fuera del período pagado de la empresa.")
     conn = get_db()
     try:
         slots = available_slots(company, booking_date, conn)
