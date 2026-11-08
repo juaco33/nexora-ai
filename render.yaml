@@ -11,6 +11,14 @@ services:
         value: admin@nexora.ai
       - key: VIRTUAL_EMPLOYEE_DATABASE
         value: /var/data/virtual_employee.db
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: NEXORA_TOKEN_ENCRYPTION_KEY
+        sync: false
     disk:
       name: nexora-data
       mountPath: /var/data
